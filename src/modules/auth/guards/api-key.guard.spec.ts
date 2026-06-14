@@ -3,6 +3,8 @@ import { Reflector } from '@nestjs/core';
 import { ApiKeyGuard } from './api-key.guard';
 import { AuthService } from '../auth.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
+import { AuditService } from '../../audit/audit.service';
+import { AuditAction } from '../../audit/entities/audit-log.entity';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
@@ -30,6 +32,9 @@ function createMockContext(
   const request = {
     headers,
     params,
+    method: 'GET',
+    originalUrl: '/api/sessions',
+    url: '/api/sessions',
     ip: '127.0.0.1',
     socket: { remoteAddress: '127.0.0.1' },
   };
@@ -47,6 +52,7 @@ describe('ApiKeyGuard', () => {
   let guard: ApiKeyGuard;
   let authService: jest.Mocked<Partial<AuthService>>;
   let reflector: jest.Mocked<Reflector>;
+  let auditService: jest.Mocked<Partial<AuditService>>;
 
   beforeEach(() => {
     authService = {
@@ -58,7 +64,11 @@ describe('ApiKeyGuard', () => {
       getAllAndOverride: jest.fn(),
     } as unknown as jest.Mocked<Reflector>;
 
-    guard = new ApiKeyGuard(authService as AuthService, reflector);
+    auditService = {
+      logInfo: jest.fn().mockResolvedValue({}),
+    };
+
+    guard = new ApiKeyGuard(authService as AuthService, reflector, auditService as AuditService);
   });
 
   it('should allow access to @Public() routes without API key', async () => {
@@ -93,6 +103,16 @@ describe('ApiKeyGuard', () => {
 
     expect(result).toBe(true);
     expect(authService.validateApiKey).toHaveBeenCalledWith('my-key', '127.0.0.1', undefined);
+    expect(auditService.logInfo).toHaveBeenCalledWith(
+      AuditAction.API_KEY_USED,
+      expect.objectContaining({
+        apiKey,
+        ipAddress: '127.0.0.1',
+        method: 'GET',
+        path: '/api/sessions',
+        statusCode: 200,
+      }),
+    );
   });
 
   it('should accept Authorization Bearer header', async () => {

@@ -31,8 +31,10 @@ function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
 describe('AuthService', () => {
   let service: AuthService;
   let repository: jest.Mocked<Partial<Repository<ApiKey>>>;
+  const originalEnv = process.env;
 
   beforeEach(async () => {
+    process.env = { ...originalEnv };
     repository = {
       count: jest.fn(),
       find: jest.fn(),
@@ -53,6 +55,62 @@ describe('AuthService', () => {
     }).compile();
 
     service = module.get<AuthService>(AuthService);
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  describe('onModuleInit', () => {
+    it('should create configured API_MASTER_KEY even when no key exists for that hash', async () => {
+      process.env.API_MASTER_KEY = 'configured-master-key';
+      (repository.findOne as jest.Mock).mockResolvedValue(null);
+      const saved = createMockApiKey({ name: 'Master Admin Key', role: ApiKeyRole.ADMIN });
+      (repository.create as jest.Mock).mockReturnValue(saved);
+      (repository.save as jest.Mock).mockResolvedValue(saved);
+
+      await service.onModuleInit();
+
+      expect(repository.findOne).toHaveBeenCalledWith({ where: { keyHash: hashKey('configured-master-key') } });
+      expect(repository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Master Admin Key',
+          keyHash: hashKey('configured-master-key'),
+          keyPrefix: 'configured-m',
+          role: ApiKeyRole.ADMIN,
+        }),
+      );
+      expect(repository.count).not.toHaveBeenCalled();
+    });
+
+    it('should reactivate and promote existing API_MASTER_KEY to unrestricted admin', async () => {
+      process.env.API_MASTER_KEY = 'configured-master-key';
+      const existing = createMockApiKey({
+        name: '',
+        role: ApiKeyRole.VIEWER,
+        isActive: false,
+        allowedIps: ['127.0.0.1'],
+        allowedSessions: ['session-a'],
+        expiresAt: new Date(Date.now() - 1000),
+        keyHash: hashKey('configured-master-key'),
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(existing);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      await service.onModuleInit();
+
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Master Admin Key',
+          role: ApiKeyRole.ADMIN,
+          isActive: true,
+          allowedIps: null,
+          allowedSessions: null,
+          expiresAt: null,
+        }),
+      );
+      expect(repository.count).not.toHaveBeenCalled();
+    });
   });
 
   // ── createApiKey ──────────────────────────────────────────────────

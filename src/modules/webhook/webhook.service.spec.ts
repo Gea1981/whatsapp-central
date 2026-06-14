@@ -145,6 +145,19 @@ describe('WebhookService', () => {
 
       expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
     });
+
+    it('should normalize serialized json fields from the database', async () => {
+      const webhook = createMockWebhook({
+        events: '["message.received","*"]' as unknown as string[],
+        headers: '{"X-Test":"yes"}' as unknown as Record<string, string>,
+      });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+
+      const result = await service.findAll();
+
+      expect(result[0].events).toEqual(['message.received', '*']);
+      expect(result[0].headers).toEqual({ 'X-Test': 'yes' });
+    });
   });
 
   describe('findOne', () => {

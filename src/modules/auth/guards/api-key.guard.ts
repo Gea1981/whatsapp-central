@@ -4,12 +4,15 @@ import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, PUBLIC_KEY } from '../decorators/auth.decorators';
+import { AuditService } from '../../audit/audit.service';
+import { AuditAction } from '../../audit/entities/audit-log.entity';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
   constructor(
     private readonly authService: AuthService,
     private readonly reflector: Reflector,
+    private readonly auditService: AuditService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -43,6 +46,15 @@ export class ApiKeyGuard implements CanActivate {
     if (requiredRole && !this.authService.hasPermission(apiKey, requiredRole)) {
       throw new UnauthorizedException(`Insufficient permissions. Required: ${requiredRole}`);
     }
+
+    await this.auditService.logInfo(AuditAction.API_KEY_USED, {
+      apiKey,
+      sessionId,
+      ipAddress: clientIp,
+      method: request.method,
+      path: request.originalUrl || request.url,
+      statusCode: 200,
+    });
 
     // Attach API key to request for use in controllers
     (request as Request & { apiKey: typeof apiKey }).apiKey = apiKey;

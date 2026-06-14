@@ -28,7 +28,7 @@ import {
   queryKeys,
 } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
-import { useToast } from '../components/Toast';
+import { useToast } from '../hooks/useToast';
 import './Plugins.css';
 
 type PluginType = 'engine' | 'storage' | 'queue' | 'auth' | 'extension';

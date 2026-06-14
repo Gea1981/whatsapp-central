@@ -20,59 +20,93 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    const configuredMasterKey = process.env.API_MASTER_KEY?.trim();
+
+    // If an operator sets API_MASTER_KEY, that key must be valid even when
+    // the database already contains older/generated keys. Otherwise changing
+    // .env after the first boot would never affect dashboard/API login.
+    if (configuredMasterKey) {
+      await this.ensureMasterApiKey(configuredMasterKey);
+      this.writeApiKeyFile(configuredMasterKey);
+      this.logStartupBanner(configuredMasterKey, false);
+      return;
+    }
+
     // Seed a default API key if none exist
     const count = await this.apiKeyRepository.count();
     let displayKey: string;
     let isNewKey = false;
 
     if (count === 0) {
-      // Use predictable key in development, random key in production
       displayKey =
         process.env.NODE_ENV === 'production' ? `owa_k1_${randomBytes(32).toString('hex')}` : 'dev-admin-key';
 
       await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;
-
-      // Save raw key to file for startup script to read
-      try {
-        writeFileSync(API_KEY_FILE, displayKey, 'utf-8');
-      } catch (err) {
-        this.logger.warn('Could not save API key file', { error: String(err) });
-      }
+      this.writeApiKeyFile(displayKey);
     } else {
-      // Read saved API key from file if exists
-      if (existsSync(API_KEY_FILE)) {
-        try {
-          displayKey = readFileSync(API_KEY_FILE, 'utf-8').trim();
-        } catch (error) {
-          this.logger.warn(`Failed to read API key file: ${API_KEY_FILE}`, { error: String(error) });
-          displayKey = '(check dashboard for keys)';
-        }
-      } else {
-        displayKey = '(check dashboard for keys)';
-      }
+      displayKey = this.readApiKeyFile();
     }
 
+    this.logStartupBanner(displayKey, isNewKey);
+  }
+
+  private async ensureMasterApiKey(rawKey: string): Promise<void> {
+    const keyHash = this.hashKey(rawKey);
+    const existing = await this.apiKeyRepository.findOne({ where: { keyHash } });
+
+    if (existing) {
+      existing.name = existing.name || 'Master Admin Key';
+      existing.role = ApiKeyRole.ADMIN;
+      existing.isActive = true;
+      existing.allowedIps = null;
+      existing.allowedSessions = null;
+      existing.expiresAt = null;
+      await this.apiKeyRepository.save(existing);
+      return;
+    }
+
+    await this.seedApiKey(rawKey, 'Master Admin Key', ApiKeyRole.ADMIN);
+  }
+
+  private writeApiKeyFile(rawKey: string): void {
+    try {
+      writeFileSync(API_KEY_FILE, rawKey, 'utf-8');
+    } catch (err) {
+      this.logger.warn('Could not save API key file', { error: String(err) });
+    }
+  }
+
+  private readApiKeyFile(): string {
+    if (!existsSync(API_KEY_FILE)) {
+      return '(check dashboard for keys)';
+    }
+
+    try {
+      return readFileSync(API_KEY_FILE, 'utf-8').trim();
+    } catch (error) {
+      this.logger.warn(`Failed to read API key file: ${API_KEY_FILE}`, { error: String(error) });
+      return '(check dashboard for keys)';
+    }
+  }
+
+  private logStartupBanner(displayKey: string, isNewKey: boolean): void {
     // Always show the welcome banner on startup
     const apiBaseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 2785}`;
     const dashboardUrl = process.env.DASHBOARD_URL || `http://localhost:${process.env.DASHBOARD_PORT || 2886}`;
 
     this.logger.log('');
-    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.logger.log('????????????????????????????????????????????????????????????????????????????????????????');
     this.logger.log('');
-    this.logger.log('  🟢 Welcome to OpenWA - WhatsApp API Gateway');
+    this.logger.log('  ?? Welcome to OpenWA - WhatsApp API Gateway');
     this.logger.log('');
-    this.logger.log(`  📊 Dashboard: ${dashboardUrl}`);
-    this.logger.log(`  📚 API Docs:  ${apiBaseUrl}/api/docs`);
+    this.logger.log(`  ?? Dashboard: ${dashboardUrl}`);
+    this.logger.log(`  ?? API Docs:  ${apiBaseUrl}/api/docs`);
     this.logger.log('');
-    if (isNewKey) {
-      this.logger.log('  🔑 API Key (newly created):');
-    } else {
-      this.logger.log('  🔑 API Key:');
-    }
+    this.logger.log(isNewKey ? '  ?? API Key (newly created):' : '  ?? API Key:');
     this.logger.log(`     ${displayKey}`);
     this.logger.log('');
-    this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.logger.log('????????????????????????????????????????????????????????????????????????????????????????');
     this.logger.log('');
   }
 

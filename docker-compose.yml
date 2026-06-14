@@ -34,6 +34,10 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=2785
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - BASE_URL=${BASE_URL:-http://localhost:${API_PORT:-2785}}
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:${DASHBOARD_PORT:-2886}}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:${DASHBOARD_PORT:-2886}}
+      - ENABLE_SWAGGER=${ENABLE_SWAGGER:-false}
       # Database
       - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
       - DATABASE_NAME=${DATABASE_NAME:-/app/data/openwa.sqlite}
@@ -53,6 +57,8 @@ services:
       - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-minioadmin}}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-minioadmin}}
       - S3_BUCKET=${S3_BUCKET:-openwa}
       # Redis
       - REDIS_ENABLED=${REDIS_ENABLED:-false}
@@ -63,8 +69,12 @@ services:
       - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
       - WEBHOOK_RETRY_DELAY=${WEBHOOK_RETRY_DELAY:-5000}
       # Rate Limit
-      - RATE_LIMIT_TTL=${RATE_LIMIT_TTL:-60}
-      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
+      - RATE_LIMIT_SHORT_TTL=${RATE_LIMIT_SHORT_TTL:-1000}
+      - RATE_LIMIT_SHORT_LIMIT=${RATE_LIMIT_SHORT_LIMIT:-10}
+      - RATE_LIMIT_MEDIUM_TTL=${RATE_LIMIT_MEDIUM_TTL:-60000}
+      - RATE_LIMIT_MEDIUM_LIMIT=${RATE_LIMIT_MEDIUM_LIMIT:-100}
+      - RATE_LIMIT_LONG_TTL=${RATE_LIMIT_LONG_TTL:-3600000}
+      - RATE_LIMIT_LONG_LIMIT=${RATE_LIMIT_LONG_LIMIT:-1000}
       # Plugins
       - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
       - PLUGINS_DIR=/app/data/plugins
@@ -117,7 +127,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: openwa-postgres
-    profiles: ['postgres']
+    profiles: ['postgres', 'full']
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
@@ -138,7 +148,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: openwa-redis
-    profiles: ['redis']
+    profiles: ['redis', 'full']
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -156,7 +166,7 @@ services:
   minio:
     image: minio/minio
     container_name: openwa-minio
-    profiles: ['minio']
+    profiles: ['minio', 'full']
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:

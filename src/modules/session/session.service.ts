@@ -7,15 +7,16 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, DataSource } from 'typeorm';
+import { Repository, In, DataSource, MoreThanOrEqual } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
-import { IWhatsAppEngine, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import { IWhatsAppEngine, EngineStatus, IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 
 interface ReconnectState {
   attempts: number;
@@ -231,126 +232,180 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     });
     this.engines.set(id, engine);
 
-    await engine.initialize({
-      onQRCode: (): void => {
-        this.logger.log('QR code generated', {
-          sessionId: id,
-          action: 'qr_generated',
-        });
-
-        // Execute hook for QR event
-        void this.hookManager.execute(
-          'session:qr',
-          { sessionId: id },
-          {
+    try {
+      await engine.initialize({
+        onQRCode: (): void => {
+          this.logger.log('QR code generated', {
             sessionId: id,
-            source: 'Engine',
-          },
-        );
-
-        void this.updateStatus(id, SessionStatus.QR_READY);
-      },
-      onReady: (phone: string, pushName: string): void => {
-        this.logger.log(`Session ready: ${phone}`, {
-          sessionId: id,
-          phone,
-          pushName,
-          action: 'ready',
-        });
-
-        // Execute hook for ready event
-        void this.hookManager.execute(
-          'session:ready',
-          { phone, pushName },
-          {
-            sessionId: id,
-            source: 'Engine',
-          },
-        );
-
-        // Reset reconnect attempts on successful connection
-        const reconnectState = this.reconnectStates.get(id);
-        if (reconnectState) {
-          reconnectState.attempts = 0;
-        }
-
-        void this.sessionRepository.update(id, {
-          status: SessionStatus.READY,
-          phone,
-          pushName,
-          connectedAt: new Date(),
-          lastActiveAt: new Date(),
-        });
-      },
-      onMessage: (message): void => {
-        this.logger.debug(`Message received from ${message.from}`, {
-          sessionId: id,
-          messageId: message.id,
-          from: message.from,
-          action: 'message_received',
-        });
-        // Update last active timestamp
-        void this.sessionRepository.update(id, { lastActiveAt: new Date() });
-        // Convert IncomingMessage to plain object for dispatch
-        const messageData = { ...message };
-
-        // Execute hook for message received - plugins can modify or stop processing
-        void this.hookManager
-          .execute('message:received', messageData, {
-            sessionId: id,
-            source: 'Engine',
-          })
-          .then(({ continue: shouldContinue, data: finalMessage }) => {
-            if (!shouldContinue) {
-              // Plugin stopped processing (e.g., auto-reply handled it)
-              return;
-            }
-
-            // Dispatch to webhooks with potentially modified message
-            void this.webhookService.dispatch(id, 'message.received', finalMessage as Record<string, unknown>);
-            // Emit real-time event to WebSocket clients
-            this.eventsGateway.emitMessage(id, finalMessage as Record<string, unknown>);
+            action: 'qr_generated',
           });
-      },
-      onDisconnected: (reason: string): void => {
-        this.logger.warn(`Session disconnected: ${reason}`, {
-          sessionId: id,
-          reason,
-          action: 'disconnected',
-        });
 
-        // Execute hook for disconnected event
-        void this.hookManager.execute(
-          'session:disconnected',
-          { reason },
-          {
+          // Execute hook for QR event
+          void this.hookManager.execute(
+            'session:qr',
+            { sessionId: id },
+            {
+              sessionId: id,
+              source: 'Engine',
+            },
+          );
+
+          this.eventsGateway.emitQRCode(id, engine.getQRCode() ?? '');
+          this.eventsGateway.emitSessionStatus(id, SessionStatus.QR_READY);
+          void this.updateStatus(id, SessionStatus.QR_READY);
+        },
+        onReady: (phone: string, pushName: string): void => {
+          this.logger.log(`Session ready: ${phone}`, {
             sessionId: id,
-            source: 'Engine',
-          },
-        );
+            phone,
+            pushName,
+            action: 'ready',
+          });
 
-        void this.updateStatus(id, SessionStatus.DISCONNECTED);
+          // Execute hook for ready event
+          void this.hookManager.execute(
+            'session:ready',
+            { phone, pushName },
+            {
+              sessionId: id,
+              source: 'Engine',
+            },
+          );
 
-        // Attempt to reconnect
-        this.scheduleReconnect(id, session);
-      },
-      onStateChanged: (engineState: EngineStatus): void => {
-        const statusMap: Record<EngineStatus, SessionStatus> = {
-          [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
-          [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
-          [EngineStatus.QR_READY]: SessionStatus.QR_READY,
-          [EngineStatus.AUTHENTICATING]: SessionStatus.AUTHENTICATING,
-          [EngineStatus.READY]: SessionStatus.READY,
-          [EngineStatus.FAILED]: SessionStatus.FAILED,
-        };
-        const newStatus = statusMap[engineState];
-        if (newStatus) {
-          void this.updateStatus(id, newStatus);
-        }
+          // Reset reconnect attempts on successful connection
+          const reconnectState = this.reconnectStates.get(id);
+          if (reconnectState) {
+            reconnectState.attempts = 0;
+          }
+
+          void this.sessionRepository.update(id, {
+            status: SessionStatus.READY,
+            phone,
+            pushName,
+            connectedAt: new Date(),
+            lastActiveAt: new Date(),
+          });
+          this.eventsGateway.emitSessionStatus(id, SessionStatus.READY, { phone, pushName });
+        },
+        onMessage: (message): void => {
+          void this.handleEngineMessage(id, message);
+        },
+        onDisconnected: (reason: string): void => {
+          this.logger.warn(`Session disconnected: ${reason}`, {
+            sessionId: id,
+            reason,
+            action: 'disconnected',
+          });
+
+          // Execute hook for disconnected event
+          void this.hookManager.execute(
+            'session:disconnected',
+            { reason },
+            {
+              sessionId: id,
+              source: 'Engine',
+            },
+          );
+
+          void this.updateStatus(id, SessionStatus.DISCONNECTED);
+          this.eventsGateway.emitSessionStatus(id, SessionStatus.DISCONNECTED, { reason });
+
+          // Attempt to reconnect
+          this.scheduleReconnect(id, session);
+        },
+        onStateChanged: (engineState: EngineStatus): void => {
+          const statusMap: Record<EngineStatus, SessionStatus> = {
+            [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
+            [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
+            [EngineStatus.QR_READY]: SessionStatus.QR_READY,
+            [EngineStatus.AUTHENTICATING]: SessionStatus.AUTHENTICATING,
+            [EngineStatus.READY]: SessionStatus.READY,
+            [EngineStatus.FAILED]: SessionStatus.FAILED,
+          };
+          const newStatus = statusMap[engineState];
+          if (newStatus) {
+            void this.updateStatus(id, newStatus);
+          }
+        },
+      });
+    } catch (error) {
+      this.engines.delete(id);
+      this.cancelReconnect(id);
+      await this.updateStatus(id, SessionStatus.FAILED);
+      throw error;
+    }
+
+    await this.updateStatus(id, SessionStatus.INITIALIZING);
+  }
+
+  private async handleEngineMessage(id: string, message: IncomingMessage): Promise<void> {
+    const direction = message.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
+    const status = message.fromMe ? MessageStatus.SENT : MessageStatus.DELIVERED;
+    const eventName = message.fromMe ? 'message.sent' : 'message.received';
+    const hookName = message.fromMe ? 'message:sent' : 'message:received';
+    const emitMessage = message.fromMe
+      ? this.eventsGateway.emitMessageSent.bind(this.eventsGateway)
+      : this.eventsGateway.emitMessage.bind(this.eventsGateway);
+
+    this.logger.debug(`${message.fromMe ? 'Outgoing' : 'Incoming'} message observed from engine`, {
+      sessionId: id,
+      messageId: message.id,
+      from: message.from,
+      to: message.to,
+      chatId: message.chatId,
+      action: message.fromMe ? 'message_sent_observed' : 'message_received',
+    });
+
+    const messageRepository = this.dataSource.getRepository(Message);
+
+    const existing = await messageRepository.findOne({
+      where: { sessionId: id, waMessageId: message.id },
+    });
+
+    if (existing) {
+      return;
+    }
+
+    await this.sessionRepository.update(id, { lastActiveAt: new Date() });
+
+    const savedMessage = await messageRepository.save({
+      sessionId: id,
+      waMessageId: message.id,
+      chatId: message.chatId,
+      from: message.from,
+      to: message.to,
+      body: message.body,
+      type: message.type,
+      direction,
+      timestamp: message.timestamp,
+      status,
+      metadata: {
+        fromMe: message.fromMe,
+        isGroup: message.isGroup,
+        media: message.media,
+        quotedMessage: message.quotedMessage,
       },
     });
 
-    await this.updateStatus(id, SessionStatus.INITIALIZING);
+    const messageData = {
+      ...message,
+      id: savedMessage.id,
+      waMessageId: message.id,
+      direction,
+      status,
+    };
+
+    const { continue: shouldContinue, data: finalMessage } = await this.hookManager.execute(hookName, messageData, {
+      sessionId: id,
+      source: 'Engine',
+    });
+
+    if (!shouldContinue) {
+      return;
+    }
+
+    await this.webhookService.dispatch(id, eventName, finalMessage);
+    emitMessage(id, finalMessage);
   }
 
   private scheduleReconnect(id: string, session: Session): void {
@@ -498,6 +553,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     active: number;
     ready: number;
     disconnected: number;
+    messagesToday: number;
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
@@ -509,12 +565,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     }
 
     const memory = process.memoryUsage();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const messagesToday = await this.dataSource.getRepository(Message).count({
+      where: { createdAt: MoreThanOrEqual(startOfToday) },
+    });
 
     return {
       total: sessions.length,
       active: this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,
       disconnected: byStatus[SessionStatus.DISCONNECTED] || 0,
+      messagesToday,
       byStatus,
       memoryUsage: {
         heapUsed: Math.round(memory.heapUsed / 1024 / 1024),

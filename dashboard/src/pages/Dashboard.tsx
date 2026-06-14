@@ -38,9 +38,9 @@ export function Dashboard() {
       trend: `+${stats?.ready ?? 0}`,
       trendUp: true,
     },
-    { label: t('dashboard.stats.messagesToday'), value: '—', icon: Send, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.messagesToday'), value: stats?.messagesToday ?? 0, icon: Send, trend: '0', trendUp: null },
     { label: t('dashboard.stats.webhooksConfigured'), value: webhookCount, icon: Webhook, trend: '0', trendUp: null },
-    { label: t('dashboard.stats.apiCalls'), value: '—', icon: Activity, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.apiCalls'), value: stats?.apiCalls24h ?? 0, icon: Activity, trend: '0', trendUp: null },
   ];
 
   const formatLastActive = (date?: string) => {

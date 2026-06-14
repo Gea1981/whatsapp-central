@@ -45,7 +45,8 @@
     "logout": "יציאה",
     "refresh": "רענון",
     "errorGeneric": "אירעה שגיאה",
-    "unknownError": "שגיאה לא ידועה"
+    "unknownError": "שגיאה לא ידועה",
+    "spanish": "Spanish"
   },
   "theme": {
     "light": "בהיר",
@@ -61,7 +62,8 @@
     "messageTester": "בדיקת הודעות",
     "infrastructure": "תשתית",
     "plugins": "תוספים",
-    "logs": "לוגים"
+    "logs": "לוגים",
+    "inbox": "Inbox"
   },
   "errorBoundary": {
     "title": "משהו השתבש",
@@ -507,6 +509,33 @@
       "savedTitle": "התצורה נשמרה",
       "savedDesc": "נדרש אתחול שרת כדי להחיל את השינויים.",
       "saveFailed": "השמירה נכשלה"
+    }
+  },
+  "inbox": {
+    "title": "Inbox",
+    "subtitle": "Read incoming chats and reply from the dashboard",
+    "session": "Session",
+    "noSessions": "No sessions available",
+    "realtimeConnected": "Realtime connected",
+    "realtimeDisconnected": "Realtime disconnected",
+    "sourceHint": "Messages come from the backend event stream; external callbacks are configured in Webhooks.",
+    "chats": "Chats",
+    "chatCount": "{{count}} chats",
+    "loadingMessages": "Loading messages...",
+    "noMessages": "No messages yet",
+    "noMessagesHint": "When this session receives a WhatsApp message, it will appear here.",
+    "selectChatTitle": "Select a chat",
+    "selectChatHint": "Choose a conversation from the left to read and reply.",
+    "replyPlaceholder": "Type a reply... Enter sends, Shift+Enter adds a new line.",
+    "viewOnly": "Your role can only view messages",
+    "send": "Send",
+    "directions": {
+      "incoming": "incoming",
+      "outgoing": "outgoing"
+    },
+    "toasts": {
+      "loadFailed": "Could not load messages",
+      "sendFailed": "Could not send reply"
     }
   }
 }

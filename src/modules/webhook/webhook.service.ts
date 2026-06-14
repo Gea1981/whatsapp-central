@@ -59,20 +59,24 @@ export class WebhookService {
       retryCount: dto.retryCount ?? 3,
     });
 
-    return this.webhookRepository.save(webhook);
+    return this.normalizeWebhook(await this.webhookRepository.save(webhook));
   }
 
   async findBySession(sessionId: string): Promise<Webhook[]> {
-    return this.webhookRepository.find({
+    const webhooks = await this.webhookRepository.find({
       where: { sessionId },
       order: { createdAt: 'DESC' },
     });
+
+    return webhooks.map(webhook => this.normalizeWebhook(webhook));
   }
 
   async findAll(): Promise<Webhook[]> {
-    return this.webhookRepository.find({
+    const webhooks = await this.webhookRepository.find({
       order: { createdAt: 'DESC' },
     });
+
+    return webhooks.map(webhook => this.normalizeWebhook(webhook));
   }
 
   async findOne(id: string): Promise<Webhook> {
@@ -80,7 +84,7 @@ export class WebhookService {
     if (!webhook) {
       throw new NotFoundException(`Webhook with id '${id}' not found`);
     }
-    return webhook;
+    return this.normalizeWebhook(webhook);
   }
 
   async update(id: string, dto: UpdateWebhookDto): Promise<Webhook> {
@@ -93,7 +97,7 @@ export class WebhookService {
     if (dto.active !== undefined) webhook.active = dto.active;
     if (dto.retryCount !== undefined) webhook.retryCount = dto.retryCount;
 
-    return this.webhookRepository.save(webhook);
+    return this.normalizeWebhook(await this.webhookRepository.save(webhook));
   }
 
   async delete(id: string): Promise<void> {
@@ -361,5 +365,37 @@ export class WebhookService {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private normalizeWebhook(webhook: Webhook): Webhook {
+    const webhookLike = webhook as Webhook & {
+      events: string[] | string | null;
+      headers: Record<string, string> | string | null;
+    };
+
+    if (typeof webhookLike.events === 'string') {
+      try {
+        const parsed = JSON.parse(webhookLike.events) as unknown;
+        webhookLike.events = Array.isArray(parsed) ? parsed.map(String) : ['message.received'];
+      } catch {
+        webhookLike.events = ['message.received'];
+      }
+    } else if (!Array.isArray(webhookLike.events)) {
+      webhookLike.events = ['message.received'];
+    }
+
+    if (typeof webhookLike.headers === 'string') {
+      try {
+        const parsed = JSON.parse(webhookLike.headers) as unknown;
+        webhookLike.headers =
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, string>) : {};
+      } catch {
+        webhookLike.headers = {};
+      }
+    } else if (!webhookLike.headers || Array.isArray(webhookLike.headers)) {
+      webhookLike.headers = {};
+    }
+
+    return webhook;
   }
 }

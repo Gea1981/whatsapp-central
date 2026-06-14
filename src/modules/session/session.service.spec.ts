@@ -4,6 +4,8 @@ import { Repository, DataSource } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { SessionService } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { EngineEventCallbacks, IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -27,6 +29,10 @@ function createMockSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+function flushPromises(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
 describe('SessionService', () => {
   let service: SessionService;
   let repository: jest.Mocked<Partial<Repository<Session>>>;
@@ -35,6 +41,7 @@ describe('SessionService', () => {
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
   let webhookService: jest.Mocked<Partial<WebhookService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
+  let messageRepository: { count: jest.Mock; findOne: jest.Mock; save: jest.Mock };
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -48,7 +55,16 @@ describe('SessionService', () => {
       update: jest.fn(),
     };
 
+    messageRepository = {
+      count: jest.fn().mockResolvedValue(0),
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest
+        .fn()
+        .mockImplementation((data: Partial<Message>) => Promise.resolve({ id: 'stored-message-id', ...data })),
+    };
+
     dataSource = {
+      getRepository: jest.fn().mockReturnValue(messageRepository),
       transaction: jest.fn().mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
         const manager = {
           save: jest.fn().mockImplementation((entity: unknown) => Promise.resolve(entity)),
@@ -73,6 +89,7 @@ describe('SessionService', () => {
     eventsGateway = {
       emitSessionStatus: jest.fn(),
       emitMessage: jest.fn(),
+      emitMessageSent: jest.fn(),
     };
 
     webhookService = {
@@ -251,6 +268,85 @@ describe('SessionService', () => {
         expect.any(Object),
       );
     });
+
+    it('should persist messages sent from the linked phone as outgoing and emit message.sent', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockImplementation((_hook: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+
+      await service.start('sess-uuid-1');
+
+      const initialize = mockEngine.initialize as jest.MockedFunction<
+        (callbacks: EngineEventCallbacks) => Promise<void>
+      >;
+      const callbacks = initialize.mock.calls[0][0];
+      callbacks.onMessage?.({
+        id: 'wa-outgoing-1',
+        from: '5491111111111@c.us',
+        to: '5492222222222@c.us',
+        chatId: '5492222222222@c.us',
+        body: 'Respondido desde el celular',
+        type: 'chat',
+        timestamp: 123,
+        fromMe: true,
+        isGroup: false,
+      } satisfies IncomingMessage);
+
+      await flushPromises();
+
+      expect(messageRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          waMessageId: 'wa-outgoing-1',
+          chatId: '5492222222222@c.us',
+          direction: MessageDirection.OUTGOING,
+          status: MessageStatus.SENT,
+        }),
+      );
+      expect(webhookService.dispatch).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        'message.sent',
+        expect.objectContaining({ waMessageId: 'wa-outgoing-1', direction: MessageDirection.OUTGOING }),
+      );
+      expect(eventsGateway.emitMessageSent).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ waMessageId: 'wa-outgoing-1', direction: MessageDirection.OUTGOING }),
+      );
+    });
+
+    it('should not duplicate an engine message already stored by WhatsApp message id', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      messageRepository.findOne.mockResolvedValueOnce({ id: 'existing-message-id' });
+
+      await service.start('sess-uuid-1');
+
+      const initialize = mockEngine.initialize as jest.MockedFunction<
+        (callbacks: EngineEventCallbacks) => Promise<void>
+      >;
+      const callbacks = initialize.mock.calls[0][0];
+      callbacks.onMessage?.({
+        id: 'wa-existing-1',
+        from: '5491111111111@c.us',
+        to: '5492222222222@c.us',
+        chatId: '5492222222222@c.us',
+        body: 'Ya guardado',
+        type: 'chat',
+        timestamp: 123,
+        fromMe: true,
+        isGroup: false,
+      } satisfies IncomingMessage);
+
+      await flushPromises();
+
+      expect(messageRepository.save).not.toHaveBeenCalledWith(
+        expect.objectContaining({ waMessageId: 'wa-existing-1' }),
+      );
+      expect(webhookService.dispatch).not.toHaveBeenCalledWith('sess-uuid-1', 'message.sent', expect.anything());
+    });
   });
 
   // ── stop ──────────────────────────────────────────────────────────
@@ -325,8 +421,10 @@ describe('SessionService', () => {
       expect(stats.total).toBe(3);
       expect(stats.ready).toBe(2);
       expect(stats.disconnected).toBe(1);
+      expect(stats.messagesToday).toBe(0);
       expect(stats.byStatus[SessionStatus.READY]).toBe(2);
       expect(stats.memoryUsage).toBeDefined();
+      expect(dataSource.getRepository).toHaveBeenCalledWith(Message);
     });
   });
 

@@ -13,7 +13,7 @@ interface QRCodeEvent {
   timestamp: string;
 }
 
-interface MessageEvent {
+export interface MessageEvent {
   sessionId: string;
   message: Record<string, unknown>;
   timestamp: string;
@@ -25,6 +25,16 @@ interface WebSocketEvents {
   onMessage?: (event: MessageEvent) => void;
 }
 
+interface WSEventEnvelope {
+  type: 'event';
+  payload: {
+    event: string;
+    sessionId: string;
+    data: Record<string, unknown>;
+  };
+  timestamp: string;
+}
+
 // Use current origin for WebSocket (goes through nginx proxy in Docker)
 // Falls back to env var or localhost for development
 const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
@@ -32,6 +42,7 @@ const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const { onSessionStatus, onQRCode, onMessage } = events;
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
@@ -63,6 +74,12 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     socketRef.current.on('connect', () => {
       console.log('[WebSocket] Connected');
       setIsConnected(true);
+      socketRef.current?.emit('message', {
+        type: 'subscribe',
+        sessionId: '*',
+        events: ['*'],
+        requestId: crypto.randomUUID(),
+      });
     });
 
     socketRef.current.on('disconnect', () => {
@@ -92,24 +109,42 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 
     const socket = socketRef.current;
 
-    if (events.onSessionStatus) {
-      socket.on('session:status', events.onSessionStatus);
-    }
+    const handleServerMessage = (message: WSEventEnvelope) => {
+      if (message.type !== 'event') return;
 
-    if (events.onQRCode) {
-      socket.on('session:qr', events.onQRCode);
-    }
+      const { event, sessionId, data } = message.payload;
 
-    if (events.onMessage) {
-      socket.on('session:message', events.onMessage);
-    }
+      if (event === 'session.status' && onSessionStatus) {
+        onSessionStatus({
+          sessionId,
+          status: String(data.status ?? ''),
+          timestamp: message.timestamp,
+        });
+      }
+
+      if (event === 'session.qr' && onQRCode) {
+        onQRCode({
+          sessionId,
+          qrCode: String(data.qrCode ?? ''),
+          timestamp: message.timestamp,
+        });
+      }
+
+      if ((event === 'message.received' || event === 'message.sent') && onMessage) {
+        onMessage({
+          sessionId,
+          message: data,
+          timestamp: message.timestamp,
+        });
+      }
+    };
+
+    socket.on('message', handleServerMessage);
 
     return () => {
-      socket.off('session:status');
-      socket.off('session:qr');
-      socket.off('session:message');
+      socket.off('message', handleServerMessage);
     };
-  }, [events.onSessionStatus, events.onQRCode, events.onMessage]);
+  }, [onSessionStatus, onQRCode, onMessage]);
 
   return { isConnected };
 }

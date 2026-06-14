@@ -133,6 +133,8 @@ npm run dev
 
 For production, use the main `docker-compose.yml` with optional services:
 
+For the single-domain dashboard/API deployment path, see [docs/PRODUCTION_DEPLOY.md](./docs/PRODUCTION_DEPLOY.md).
+
 ```bash
 # Basic production (SQLite, local storage)
 docker compose up -d

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import { Client, LocalAuth, Message as WWebMessage, MessageMedia } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import {
@@ -140,54 +140,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }
     });
 
+    // `message` is emitted only for messages received from other users.
+    // `message_create` includes messages created by the linked account itself.
+    // Listen to both, but split by `fromMe` to avoid duplicate incoming events.
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('message', async msg => {
-      try {
-        const incomingMessage: IncomingMessage = {
-          id: msg.id._serialized,
-          from: msg.from,
-          to: msg.to,
-          chatId: msg.from,
-          body: msg.body,
-          type: msg.type,
-          timestamp: msg.timestamp,
-          fromMe: msg.fromMe,
-          isGroup: msg.from.endsWith('@g.us'),
-        };
+      if (msg.fromMe) return;
+      await this.handleMessage(msg);
+    });
 
-        // Handle media
-        if (msg.hasMedia) {
-          try {
-            const media = await msg.downloadMedia();
-            if (media) {
-              incomingMessage.media = {
-                mimetype: media.mimetype,
-                filename: media.filename || undefined,
-                data: media.data,
-              };
-            }
-          } catch (error) {
-            this.logger.error('Error downloading media', String(error));
-          }
-        }
-
-        // Handle quoted message
-        if (msg.hasQuotedMsg) {
-          try {
-            const quoted = await msg.getQuotedMessage();
-            incomingMessage.quotedMessage = {
-              id: quoted.id._serialized,
-              body: quoted.body,
-            };
-          } catch (error) {
-            this.logger.error('Error getting quoted message', String(error));
-          }
-        }
-
-        this.callbacks.onMessage?.(incomingMessage);
-      } catch (error) {
-        this.logger.error('Error processing incoming message', String(error));
-      }
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    this.client.on('message_create', async msg => {
+      if (!msg.fromMe) return;
+      await this.handleMessage(msg);
     });
 
     this.client.on('message_ack', (msg, ack) => {
@@ -209,6 +174,56 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.status = status;
     this.callbacks.onStateChanged?.(status);
     this.emit('stateChanged', status);
+  }
+
+  private async handleMessage(msg: WWebMessage): Promise<void> {
+    try {
+      const chatId = msg.fromMe ? msg.to : msg.from;
+      const incomingMessage: IncomingMessage = {
+        id: msg.id._serialized,
+        from: msg.from,
+        to: msg.to,
+        chatId,
+        body: msg.body,
+        type: msg.type,
+        timestamp: msg.timestamp,
+        fromMe: msg.fromMe,
+        isGroup: chatId.endsWith('@g.us'),
+      };
+
+      // Handle media
+      if (msg.hasMedia) {
+        try {
+          const media = await msg.downloadMedia();
+          if (media) {
+            incomingMessage.media = {
+              mimetype: media.mimetype,
+              filename: media.filename || undefined,
+              data: media.data,
+            };
+          }
+        } catch (error) {
+          this.logger.error('Error downloading media', String(error));
+        }
+      }
+
+      // Handle quoted message
+      if (msg.hasQuotedMsg) {
+        try {
+          const quoted = await msg.getQuotedMessage();
+          incomingMessage.quotedMessage = {
+            id: quoted.id._serialized,
+            body: quoted.body,
+          };
+        } catch (error) {
+          this.logger.error('Error getting quoted message', String(error));
+        }
+      }
+
+      this.callbacks.onMessage?.(incomingMessage);
+    } catch (error) {
+      this.logger.error('Error processing message', String(error));
+    }
   }
 
   async disconnect(): Promise<void> {

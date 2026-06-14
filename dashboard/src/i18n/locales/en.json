@@ -45,7 +45,8 @@
     "logout": "Logout",
     "refresh": "Refresh",
     "errorGeneric": "An error occurred",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "spanish": "Spanish"
   },
   "theme": {
     "light": "Light",
@@ -61,7 +62,8 @@
     "messageTester": "Message Tester",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
-    "logs": "Logs"
+    "logs": "Logs",
+    "inbox": "Inbox"
   },
   "errorBoundary": {
     "title": "Something went wrong",
@@ -507,6 +509,33 @@
       "savedTitle": "Configuration Saved",
       "savedDesc": "Server restart required to apply changes.",
       "saveFailed": "Save Failed"
+    }
+  },
+  "inbox": {
+    "title": "Inbox",
+    "subtitle": "Read incoming chats and reply from the dashboard",
+    "session": "Session",
+    "noSessions": "No sessions available",
+    "realtimeConnected": "Realtime connected",
+    "realtimeDisconnected": "Realtime disconnected",
+    "sourceHint": "Messages come from the backend event stream; external callbacks are configured in Webhooks.",
+    "chats": "Chats",
+    "chatCount": "{{count}} chats",
+    "loadingMessages": "Loading messages...",
+    "noMessages": "No messages yet",
+    "noMessagesHint": "When this session receives a WhatsApp message, it will appear here.",
+    "selectChatTitle": "Select a chat",
+    "selectChatHint": "Choose a conversation from the left to read and reply.",
+    "replyPlaceholder": "Type a reply... Enter sends, Shift+Enter adds a new line.",
+    "viewOnly": "Your role can only view messages",
+    "send": "Send",
+    "directions": {
+      "incoming": "incoming",
+      "outgoing": "outgoing"
+    },
+    "toasts": {
+      "loadFailed": "Could not load messages",
+      "sendFailed": "Could not send reply"
     }
   }
 }

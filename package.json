@@ -16,7 +16,7 @@
     "dashboard:install": "cd dashboard && npm install",
     "dashboard:dev": "cd dashboard && npm run dev",
     "dashboard:build": "cd dashboard && npm run build",
-    "postinstall": "[ -d dashboard ] && npm run dashboard:install || true",
+    "postinstall": "node -e \"const fs=require('fs');const cp=require('child_process');if(fs.existsSync('dashboard')) cp.execSync('npm install',{cwd:'dashboard',stdio:'inherit'});\"",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -82,7 +82,7 @@
     "@types/supertest": "^6.0.2",
     "@types/tar-stream": "^3.1.4",
     "@types/uuid": "^10.0.0",
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.3",
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
@@ -122,5 +122,11 @@
       }
     },
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "sqlite3": {
+      "node-gyp": "^12.4.0",
+      "tar": "^7.5.16"
+    }
   }
 }

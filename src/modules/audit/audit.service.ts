@@ -104,6 +104,15 @@ export class AuditService {
     });
   }
 
+  async countByActionSince(action: AuditAction, since: Date): Promise<number> {
+    return this.auditRepository.count({
+      where: {
+        action,
+        createdAt: Between(since, new Date()),
+      },
+    });
+  }
+
   async getRecentBySession(sessionId: string, limit = 10): Promise<AuditLog[]> {
     return this.auditRepository.find({
       where: { sessionId },

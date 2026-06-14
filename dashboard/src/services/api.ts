@@ -23,6 +23,8 @@ export interface SessionStats {
   active: number;
   ready: number;
   disconnected: number;
+  messagesToday: number;
+  apiCalls24h: number;
   byStatus: Record<string, number>;
   memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
 }
@@ -72,6 +74,27 @@ export interface AuditLog {
 export interface MessageResponse {
   messageId: string;
   timestamp: number;
+}
+
+export interface StoredMessage {
+  id: string;
+  sessionId: string;
+  waMessageId?: string | null;
+  chatId: string;
+  from: string;
+  to: string;
+  body?: string | null;
+  type: string;
+  direction: 'incoming' | 'outgoing';
+  timestamp?: number | string | null;
+  metadata?: Record<string, unknown> | null;
+  status: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+  createdAt: string;
+}
+
+export interface MessageHistoryResponse {
+  messages: StoredMessage[];
+  total: number;
 }
 
 export interface HealthStatus {
@@ -265,6 +288,14 @@ export const auditApi = {
 // =============================================================================
 
 export const messageApi = {
+  list: (sessionId: string, params?: { chatId?: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.chatId) query.set('chatId', params.chatId);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.offset) query.set('offset', String(params.offset));
+    const queryStr = query.toString();
+    return request<MessageHistoryResponse>(`/sessions/${sessionId}/messages${queryStr ? `?${queryStr}` : ''}`);
+  },
   sendText: (sessionId: string, chatId: string, text: string) =>
     request<MessageResponse>(`/sessions/${sessionId}/messages/send-text`, {
       method: 'POST',

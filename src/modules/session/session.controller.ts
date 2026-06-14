@@ -179,9 +179,14 @@ export class SessionController {
     active: number;
     ready: number;
     disconnected: number;
+    messagesToday: number;
+    apiCalls24h: number;
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    return this.sessionService.getStats();
+    const stats = await this.sessionService.getStats();
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const apiCalls24h = await this.auditService.countByActionSince(AuditAction.API_KEY_USED, since);
+    return { ...stats, apiCalls24h };
   }
 }
