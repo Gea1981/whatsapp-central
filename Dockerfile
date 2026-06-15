@@ -71,7 +71,7 @@ COPY --from=builder /app/dist ./dist
 
 # Create data directories with proper permissions
 RUN mkdir -p ./data/sessions ./data/media && \
-    chown -R openwa:openwa /app
+    chown -R openwa:openwa ./data
 
 # Note: Running as root to allow Docker socket access for orchestration
 # For production with stricter security, consider using a Docker socket proxy
