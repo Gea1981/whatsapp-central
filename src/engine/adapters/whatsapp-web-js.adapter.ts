@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { Client, LocalAuth, Message as WWebMessage, MessageMedia } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
+import * as os from 'os';
+import { lstat, readlink, rm } from 'fs/promises';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -68,7 +70,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
 
-    try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       // Build puppeteer args, including proxy if configured
       const puppeteerArgs = this.config.puppeteer?.args || [
         '--no-sandbox',
@@ -88,22 +90,108 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         );
       }
 
-      this.client = new Client({
-        authStrategy: new LocalAuth({
-          clientId: this.config.sessionId,
-          dataPath: path.resolve(this.config.sessionDataPath),
-        }),
-        puppeteer: {
-          headless: this.config.puppeteer?.headless ?? true,
-          args: puppeteerArgs,
-        },
-      });
+      try {
+        await this.clearStaleChromiumProfileLocks();
 
-      this.setupEventHandlers();
-      await this.client.initialize();
-    } catch (error) {
-      this.setStatus(EngineStatus.FAILED);
-      throw error;
+        this.client = new Client({
+          authStrategy: new LocalAuth({
+            clientId: this.config.sessionId,
+            dataPath: path.resolve(this.config.sessionDataPath),
+          }),
+          puppeteer: {
+            headless: this.config.puppeteer?.headless ?? true,
+            args: puppeteerArgs,
+          },
+        });
+
+        this.setupEventHandlers();
+        await this.client.initialize();
+        return;
+      } catch (error) {
+        await this.destroyClientAfterFailedInitialization();
+
+        if (attempt === 1 && this.isChromiumProfileLockedError(error)) {
+          this.logger.warn('Chromium profile lock detected; clearing stale lock files and retrying once', {
+            sessionId: this.config.sessionId,
+            profilePath: this.getLocalAuthProfilePath(),
+          });
+          await this.clearStaleChromiumProfileLocks({ force: true });
+          continue;
+        }
+
+        this.setStatus(EngineStatus.FAILED);
+        throw error;
+      }
+    }
+  }
+
+  private getLocalAuthProfilePath(): string {
+    return path.resolve(this.config.sessionDataPath, `session-${this.config.sessionId}`);
+  }
+
+  private async clearStaleChromiumProfileLocks(options?: { force?: boolean }): Promise<void> {
+    const profilePath = this.getLocalAuthProfilePath();
+    const lockPath = path.join(profilePath, 'SingletonLock');
+
+    if (!options?.force && (await this.isActiveChromiumLock(lockPath))) {
+      this.logger.warn('Chromium profile lock belongs to an active process; not removing it', {
+        sessionId: this.config.sessionId,
+        profilePath,
+      });
+      return;
+    }
+
+    await Promise.all(
+      ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].map(async fileName => {
+        const filePath = path.join(profilePath, fileName);
+        try {
+          await rm(filePath, { force: true });
+        } catch (error) {
+          this.logger.warn(`Failed to remove Chromium lock file ${fileName}`, String(error));
+        }
+      }),
+    );
+  }
+
+  private async isActiveChromiumLock(lockPath: string): Promise<boolean> {
+    try {
+      const stats = await lstat(lockPath);
+      if (!stats.isSymbolicLink()) return false;
+
+      const target = await readlink(lockPath);
+      const match = /^(?<host>.+)-(?<pid>\d+)$/.exec(target);
+      if (!match?.groups) return false;
+
+      if (match.groups.host !== os.hostname()) return false;
+
+      const pid = Number(match.groups.pid);
+      if (!Number.isInteger(pid) || pid <= 0) return false;
+
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  private isChromiumProfileLockedError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.toLowerCase().includes('profile appears to be in use');
+  }
+
+  private async destroyClientAfterFailedInitialization(): Promise<void> {
+    if (!this.client) return;
+
+    try {
+      await this.client.destroy();
+    } catch (destroyError) {
+      this.logger.warn('Destroy client failed after initialization error:', String(destroyError));
+    } finally {
+      this.client = null;
     }
   }
 
