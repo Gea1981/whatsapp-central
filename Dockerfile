@@ -2,7 +2,7 @@
 # Multi-stage build for production-ready image
 
 # ===== Stage 1: Builder =====
-FROM node:22-slim AS builder
+FROM public.ecr.aws/docker/library/node:22-slim AS builder
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ COPY . .
 RUN npm run build
 
 # ===== Stage 2: Production =====
-FROM node:22-slim AS production
+FROM public.ecr.aws/docker/library/node:22-slim AS production
 
 # Install Chrome/Chromium and required dependencies
 RUN apt-get update && apt-get install -y \

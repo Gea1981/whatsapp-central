@@ -4,7 +4,7 @@
 services:
   # ===== CORE: Traefik Reverse Proxy =====
   traefik:
-    image: traefik:v3.0
+    image: public.ecr.aws/docker/library/traefik:v3.0
     container_name: openwa-traefik
     profiles: ['with-proxy', 'full']
     restart: unless-stopped
@@ -125,7 +125,7 @@ services:
 
   # ===== OPTIONAL: Built-in PostgreSQL =====
   postgres:
-    image: postgres:16-alpine
+    image: public.ecr.aws/docker/library/postgres:16-alpine
     container_name: openwa-postgres
     profiles: ['postgres', 'full']
     restart: unless-stopped
@@ -146,7 +146,7 @@ services:
 
   # ===== OPTIONAL: Built-in Redis =====
   redis:
-    image: redis:7-alpine
+    image: public.ecr.aws/docker/library/redis:7-alpine
     container_name: openwa-redis
     profiles: ['redis', 'full']
     restart: unless-stopped
