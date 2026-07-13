@@ -262,9 +262,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async destroy(): Promise<void> {
     if (this.client) {
-      await this.client.destroy();
-      this.client = null;
-      this.setStatus(EngineStatus.DISCONNECTED);
+      try {
+        await this.client.destroy();
+      } catch (error) {
+        this.logger.warn('Destroy client failed:', String(error));
+      } finally {
+        this.client = null;
+        this.setStatus(EngineStatus.DISCONNECTED);
+      }
     }
   }
 

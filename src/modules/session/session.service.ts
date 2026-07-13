@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource, MoreThanOrEqual } from 'typeorm';
+import { rm } from 'fs/promises';
+import * as path from 'path';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -57,6 +59,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       SessionStatus.QR_READY,
       SessionStatus.AUTHENTICATING,
     ];
+    const autoStartStatuses = [...activeStatuses, SessionStatus.DISCONNECTED];
+    const sessionsToStart = await this.sessionRepository.find({
+      where: { status: In(autoStartStatuses) },
+    });
 
     const result = await this.sessionRepository.update(
       { status: In(activeStatuses) },
@@ -68,6 +74,48 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         action: 'startup_reset',
         affected: result.affected,
       });
+    }
+
+    if (sessionsToStart.length > 0) {
+      this.logger.log(`Scheduling ${sessionsToStart.length} session(s) to auto-start after backend startup`, {
+        action: 'startup_autostart_scheduled',
+        affected: sessionsToStart.length,
+      });
+
+      setTimeout(() => {
+        void this.autoStartSessions(sessionsToStart);
+      }, 3000);
+    }
+  }
+
+  private async autoStartSessions(sessions: Session[]): Promise<void> {
+    for (const session of sessions) {
+      if (session.config?.autoStart === false) {
+        this.logger.log(`Skipping auto-start for session: ${session.name}`, {
+          sessionId: session.id,
+          action: 'startup_autostart_skipped',
+        });
+        continue;
+      }
+
+      if (this.engines.has(session.id)) {
+        continue;
+      }
+
+      try {
+        await this.start(session.id);
+        this.logger.log(`Auto-started session after backend startup: ${session.name}`, {
+          sessionId: session.id,
+          action: 'startup_autostart',
+        });
+      } catch (error) {
+        this.logger.warn('Failed to auto-start session after backend startup', {
+          sessionId: session.id,
+          sessionName: session.name,
+          error: error instanceof Error ? error.message : String(error),
+          action: 'startup_autostart_failed',
+        });
+      }
     }
   }
 
@@ -188,8 +236,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
   async start(id: string): Promise<Session> {
     const session = await this.findOne(id);
 
-    if (this.engines.has(id)) {
-      throw new BadRequestException('Session is already started');
+    const existingEngine = this.engines.get(id);
+    if (existingEngine) {
+      const existingStatus = existingEngine.getStatus();
+      if ([EngineStatus.FAILED, EngineStatus.DISCONNECTED].includes(existingStatus)) {
+        try {
+          await existingEngine.destroy();
+        } catch (error) {
+          this.logger.warn('Failed to destroy stale engine before restart', {
+            sessionId: id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        this.engines.delete(id);
+      } else {
+        throw new BadRequestException('Session is already started');
+      }
     }
 
     // Execute hook before starting
@@ -291,27 +353,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           void this.handleEngineMessage(id, message);
         },
         onDisconnected: (reason: string): void => {
-          this.logger.warn(`Session disconnected: ${reason}`, {
-            sessionId: id,
-            reason,
-            action: 'disconnected',
-          });
-
-          // Execute hook for disconnected event
-          void this.hookManager.execute(
-            'session:disconnected',
-            { reason },
-            {
-              sessionId: id,
-              source: 'Engine',
-            },
-          );
-
-          void this.updateStatus(id, SessionStatus.DISCONNECTED);
-          this.eventsGateway.emitSessionStatus(id, SessionStatus.DISCONNECTED, { reason });
-
-          // Attempt to reconnect
-          this.scheduleReconnect(id, session);
+          void this.handleEngineDisconnected(id, session, reason);
         },
         onStateChanged: (engineState: EngineStatus): void => {
           const statusMap: Record<EngineStatus, SessionStatus> = {
@@ -329,6 +371,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         },
       });
     } catch (error) {
+      try {
+        await engine.destroy();
+      } catch (destroyError) {
+        this.logger.warn('Failed to destroy engine after initialization error', {
+          sessionId: id,
+          error: destroyError instanceof Error ? destroyError.message : String(destroyError),
+        });
+      }
       this.engines.delete(id);
       this.cancelReconnect(id);
       await this.updateStatus(id, SessionStatus.FAILED);
@@ -336,6 +386,73 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     }
 
     await this.updateStatus(id, SessionStatus.INITIALIZING);
+  }
+
+  private async handleEngineDisconnected(id: string, session: Session, reason: string): Promise<void> {
+    this.logger.warn(`Session disconnected: ${reason}`, {
+      sessionId: id,
+      reason,
+      action: 'disconnected',
+    });
+
+    await this.hookManager.execute(
+      'session:disconnected',
+      { reason },
+      {
+        sessionId: id,
+        source: 'Engine',
+      },
+    );
+
+    await this.updateStatus(id, SessionStatus.DISCONNECTED);
+    this.eventsGateway.emitSessionStatus(id, SessionStatus.DISCONNECTED, { reason });
+
+    if (reason.toUpperCase() === 'LOGOUT') {
+      const engine = this.engines.get(id);
+      if (engine) {
+        try {
+          await engine.destroy();
+        } catch (error) {
+          this.logger.warn('Failed to destroy logged-out engine', {
+            sessionId: id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        this.engines.delete(id);
+      }
+
+      await this.clearLocalAuthData(session);
+    }
+
+    if (reason.toUpperCase() === 'LOGOUT') {
+      // LOGOUT means the phone explicitly invalidated the auth data.
+      // Recreate the engine immediately so the UI/front can receive a fresh QR.
+      await this.start(id);
+      return;
+    }
+
+    // Attempt to reconnect for transient disconnects.
+    this.scheduleReconnect(id, session);
+  }
+
+  private async clearLocalAuthData(session: Session): Promise<void> {
+    const sessionDataPath = process.env.SESSION_DATA_PATH || './data/sessions';
+    const authPath = path.resolve(sessionDataPath, `session-${session.name}`);
+
+    try {
+      await rm(authPath, { recursive: true, force: true });
+      this.logger.log('Cleared local auth data after logout', {
+        sessionId: session.id,
+        sessionName: session.name,
+        action: 'auth_data_cleared',
+      });
+    } catch (error) {
+      this.logger.warn('Failed to clear local auth data after logout', {
+        sessionId: session.id,
+        sessionName: session.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async handleEngineMessage(id: string, message: IncomingMessage): Promise<void> {
@@ -494,13 +611,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
 
   async getQRCode(id: string): Promise<{ qrCode: string; status: SessionStatus }> {
     const session = await this.findOne(id);
-    const engine = this.engines.get(id);
+    let engine = this.engines.get(id);
 
     if (!engine) {
-      throw new BadRequestException('Session is not started. Call POST /sessions/:id/start first.');
+      if ([SessionStatus.DISCONNECTED, SessionStatus.FAILED].includes(session.status)) {
+        await this.startForQRCode(id, session);
+        engine = this.engines.get(id);
+      }
+
+      if (!engine) {
+        throw new BadRequestException('Session is not started and could not be initialized.');
+      }
     }
 
-    const qrCode = engine.getQRCode();
+    const qrCode = await this.waitForQRCode(engine, session);
 
     if (!qrCode) {
       if (session.status === SessionStatus.READY) {
@@ -511,8 +635,42 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
 
     return {
       qrCode,
-      status: session.status,
+      status: (await this.findOne(id)).status,
     };
+  }
+
+  private async waitForQRCode(engine: IWhatsAppEngine, session: Session): Promise<string | null> {
+    const attempts = 20;
+    const delayMs = 500;
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const qrCode = engine.getQRCode();
+      if (qrCode) {
+        return qrCode;
+      }
+
+      if (engine.getStatus() === EngineStatus.READY || session.status === SessionStatus.READY) {
+        return null;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    return engine.getQRCode();
+  }
+
+  private async startForQRCode(id: string, session: Session): Promise<void> {
+    try {
+      await this.start(id);
+    } catch (error) {
+      this.logger.warn('Failed to auto-start session for QR; clearing auth data and retrying once', {
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      await this.clearLocalAuthData(session);
+      await this.start(id);
+    }
   }
 
   getEngine(id: string): IWhatsAppEngine | undefined {
