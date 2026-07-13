@@ -58,6 +58,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       SessionStatus.INITIALIZING,
       SessionStatus.QR_READY,
       SessionStatus.AUTHENTICATING,
+      SessionStatus.FAILED,
     ];
     const autoStartStatuses = [...activeStatuses, SessionStatus.DISCONNECTED];
     const sessionsToStart = await this.sessionRepository.find({
