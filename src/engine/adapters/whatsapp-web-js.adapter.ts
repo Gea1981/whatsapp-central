@@ -98,6 +98,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
             clientId: this.config.sessionId,
             dataPath: path.resolve(this.config.sessionDataPath),
           }),
+          // Avoid persisting WhatsApp Web index.html locally. A stale cached
+          // bundle can still authenticate and emit "ready", but then fail at
+          // runtime when whatsapp-web.js calls internal APIs such as getChats()
+          // or message event wiring.
+          webVersionCache: {
+            type: 'none',
+          },
           puppeteer: {
             headless: this.config.puppeteer?.headless ?? true,
             args: puppeteerArgs,
