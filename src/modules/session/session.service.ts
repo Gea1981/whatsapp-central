@@ -522,8 +522,53 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       return;
     }
 
-    await this.webhookService.dispatch(id, eventName, finalMessage);
+    await this.webhookService.dispatch(id, eventName, this.sanitizeWebhookMessagePayload(finalMessage));
     emitMessage(id, finalMessage);
+  }
+
+  private sanitizeWebhookMessagePayload(message: Record<string, unknown>): Record<string, unknown> {
+    return this.stripMediaData(message);
+  }
+
+  private stripMediaData(value: unknown): Record<string, unknown> {
+    if (!this.isRecord(value)) {
+      return {};
+    }
+
+    const sanitized: Record<string, unknown> = { ...value };
+
+    if (this.isRecord(value.media)) {
+      sanitized.media = this.stripMediaDataFromMedia(value.media);
+    }
+
+    if (this.isRecord(value.metadata)) {
+      const metadata: Record<string, unknown> = { ...value.metadata };
+      if (this.isRecord(value.metadata.media)) {
+        metadata.media = this.stripMediaDataFromMedia(value.metadata.media);
+      }
+      sanitized.metadata = metadata;
+    }
+
+    return sanitized;
+  }
+
+  private stripMediaDataFromMedia(media: Record<string, unknown>): Record<string, unknown> {
+    const { data, ...mediaWithoutData } = media;
+
+    if (typeof data !== 'string') {
+      return mediaWithoutData;
+    }
+
+    return {
+      ...mediaWithoutData,
+      data: undefined,
+      dataOmitted: true,
+      dataSize: data.length,
+    };
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   private scheduleReconnect(id: string, session: Session): void {

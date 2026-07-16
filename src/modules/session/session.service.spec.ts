@@ -5,7 +5,7 @@ import { NotFoundException, ConflictException, BadRequestException } from '@nest
 import { SessionService } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
-import { EngineEventCallbacks, IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
+import { EngineEventCallbacks, EngineStatus, IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -47,7 +47,7 @@ describe('SessionService', () => {
   beforeEach(async () => {
     repository = {
       count: jest.fn(),
-      find: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
@@ -78,6 +78,7 @@ describe('SessionService', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       destroy: jest.fn().mockResolvedValue(undefined),
       disconnect: jest.fn().mockResolvedValue(undefined),
+      getStatus: jest.fn().mockReturnValue(EngineStatus.INITIALIZING),
       getQRCode: jest.fn().mockReturnValue(null),
       getGroups: jest.fn().mockResolvedValue([]),
     };
@@ -347,6 +348,60 @@ describe('SessionService', () => {
       );
       expect(webhookService.dispatch).not.toHaveBeenCalledWith('sess-uuid-1', 'message.sent', expect.anything());
     });
+
+    it('should strip base64 media data from webhook payload but keep it for websocket events', async () => {
+      const session = createMockSession();
+      const base64Data = Buffer.alloc(1024, 'x').toString('base64');
+
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockImplementation((_hook: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+
+      await service.start('sess-uuid-1');
+
+      const initialize = mockEngine.initialize as jest.MockedFunction<
+        (callbacks: EngineEventCallbacks) => Promise<void>
+      >;
+      const callbacks = initialize.mock.calls[0][0];
+      callbacks.onMessage?.({
+        id: 'wa-media-1',
+        from: '5492222222222@c.us',
+        to: '5491111111111@c.us',
+        chatId: '5492222222222@c.us',
+        body: '',
+        type: 'image',
+        timestamp: 123,
+        fromMe: false,
+        isGroup: false,
+        media: {
+          mimetype: 'image/jpeg',
+          filename: 'foto.jpg',
+          data: base64Data,
+        },
+      } satisfies IncomingMessage);
+
+      await flushPromises();
+
+      const dispatchMock = webhookService.dispatch as jest.MockedFunction<WebhookService['dispatch']>;
+      const webhookPayload = dispatchMock.mock.calls[0][2];
+      const webhookMedia = webhookPayload.media as Record<string, unknown>;
+
+      expect(webhookMedia).toMatchObject({
+        mimetype: 'image/jpeg',
+        filename: 'foto.jpg',
+        dataOmitted: true,
+        dataSize: base64Data.length,
+      });
+      expect(webhookMedia.data).toBeUndefined();
+
+      const emitMessageMock = eventsGateway.emitMessage as jest.MockedFunction<EventsGateway['emitMessage']>;
+      const websocketPayload = emitMessageMock.mock.calls[0][1];
+      const websocketMedia = websocketPayload.media as Record<string, unknown>;
+
+      expect(websocketMedia.data).toBe(base64Data);
+    });
   });
 
   // ── stop ──────────────────────────────────────────────────────────
@@ -399,6 +454,7 @@ describe('SessionService', () => {
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
 
       await service.start('sess-uuid-1');
+      mockEngine.getStatus.mockReturnValue(EngineStatus.READY);
       mockEngine.getQRCode.mockReturnValue(null);
 
       await expect(service.getQRCode('sess-uuid-1')).rejects.toThrow('already authenticated');
