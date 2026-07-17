@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     dumb-init \
     fonts-liberation \
+    patch \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -70,8 +71,14 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
+# Backport upstream whatsapp-web.js id normalization fix for WhatsApp Web
+# 2.3000.x, where serialized ids can be exposed as id.$1 instead of
+# id._serialized. Without this, current WhatsApp Web builds may authenticate
+# but fail to deliver/process message events correctly.
+COPY scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch ./scripts/
+
 # Install production dependencies only
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && node scripts/patch-wwebjs-201832.js && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist

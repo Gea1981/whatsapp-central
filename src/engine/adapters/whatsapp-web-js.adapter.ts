@@ -37,6 +37,7 @@ import {
   WwjsChannelData,
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
+import { resolveWebVersionPin } from '../wa-web-version';
 
 export interface WhatsAppWebJsConfig {
   sessionId: string;
@@ -94,23 +95,21 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       try {
         await this.clearStaleChromiumProfileLocks();
         await this.clearChromiumRuntimeCaches();
+        const versionPin = await resolveWebVersionPin();
+        if (versionPin) {
+          this.logger.log(`Pinning WhatsApp Web version ${versionPin.webVersion}`);
+        }
 
         this.client = new Client({
           authStrategy: new LocalAuth({
             clientId: this.config.sessionId,
             dataPath: path.resolve(this.config.sessionDataPath),
           }),
-          // Avoid persisting WhatsApp Web index.html locally. A stale cached
-          // bundle can still authenticate and emit "ready", but then fail at
-          // runtime when whatsapp-web.js calls internal APIs such as getChats()
-          // or message event wiring.
-          webVersionCache: {
-            type: 'none',
-          },
           puppeteer: {
             headless: this.config.puppeteer?.headless ?? true,
             args: puppeteerArgs,
           },
+          ...(versionPin ?? {}),
         });
 
         this.setupEventHandlers();
