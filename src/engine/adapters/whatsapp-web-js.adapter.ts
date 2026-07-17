@@ -59,6 +59,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private phoneNumber: string | null = null;
   private pushName: string | null = null;
   private callbacks: EngineEventCallbacks = {};
+  private readonly recentlyHandledMessageIds = new Map<string, NodeJS.Timeout>();
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
     super();
@@ -267,18 +268,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }
     });
 
-    // `message` is emitted only for messages received from other users.
-    // `message_create` includes messages created by the linked account itself.
-    // Listen to both, but split by `fromMe` to avoid duplicate incoming events.
+    // `message` is normally emitted for received messages, while `message_create`
+    // can include both incoming and outgoing messages depending on WhatsApp Web
+    // internals. Handle both and dedupe by WhatsApp message id so incoming
+    // messages are not lost when upstream skips the `message` event.
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('message', async msg => {
-      if (msg.fromMe) return;
       await this.handleMessage(msg);
     });
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('message_create', async msg => {
-      if (!msg.fromMe) return;
       await this.handleMessage(msg);
     });
 
@@ -305,6 +305,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   private async handleMessage(msg: WWebMessage): Promise<void> {
     try {
+      if (this.wasMessageRecentlyHandled(msg.id._serialized)) {
+        return;
+      }
+
       const chatId = msg.fromMe ? msg.to : msg.from;
       const incomingMessage: IncomingMessage = {
         id: msg.id._serialized,
@@ -351,6 +355,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     } catch (error) {
       this.logger.error('Error processing message', String(error));
     }
+  }
+
+  private wasMessageRecentlyHandled(messageId: string): boolean {
+    if (this.recentlyHandledMessageIds.has(messageId)) {
+      return true;
+    }
+
+    const timeout = setTimeout(() => {
+      this.recentlyHandledMessageIds.delete(messageId);
+    }, 60_000);
+    timeout.unref?.();
+    this.recentlyHandledMessageIds.set(messageId, timeout);
+    return false;
   }
 
   async disconnect(): Promise<void> {
