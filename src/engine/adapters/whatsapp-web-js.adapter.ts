@@ -92,6 +92,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
       try {
         await this.clearStaleChromiumProfileLocks();
+        await this.clearChromiumRuntimeCaches();
 
         this.client = new Client({
           authStrategy: new LocalAuth({
@@ -182,6 +183,37 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }
     } catch {
       return false;
+    }
+  }
+
+  private async clearChromiumRuntimeCaches(): Promise<void> {
+    const profilePath = this.getLocalAuthProfilePath();
+    const cachePaths = [
+      'Default/Cache',
+      'Default/Code Cache',
+      'Default/GPUCache',
+      'Default/Service Worker/CacheStorage',
+      'Default/Service Worker/ScriptCache',
+      'Default/blob_storage',
+      'Default/DawnCache',
+      'Default/GrShaderCache',
+      'Default/ShaderCache',
+      'GrShaderCache',
+      'ShaderCache',
+      'DawnCache',
+    ];
+
+    for (const relativeCachePath of cachePaths) {
+      const absoluteCachePath = path.join(profilePath, ...relativeCachePath.split('/'));
+      try {
+        await rm(absoluteCachePath, { recursive: true, force: true });
+      } catch (error) {
+        this.logger.warn('Could not clear Chromium runtime cache path', {
+          sessionId: this.config.sessionId,
+          path: absoluteCachePath,
+          error: String(error),
+        });
+      }
     }
   }
 
