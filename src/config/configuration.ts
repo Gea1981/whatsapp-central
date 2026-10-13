@@ -1,3 +1,8 @@
+function parseNonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
 
@@ -43,6 +48,10 @@ export default () => ({
     // SSL configuration
     ssl: process.env.DATABASE_SSL === 'true',
     sslRejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false',
+  },
+
+  message: {
+    retentionDays: parseNonNegativeInteger(process.env.MESSAGE_RETENTION_DAYS, 30),
   },
 
   // WhatsApp engine configuration

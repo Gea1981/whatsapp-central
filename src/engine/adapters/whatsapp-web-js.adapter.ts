@@ -38,6 +38,7 @@ import {
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
 import { resolveWebVersionPin } from '../wa-web-version';
+import { isStatusBroadcastMessage } from '../../common/utils/whatsapp-message.util';
 
 export interface WhatsAppWebJsConfig {
   sessionId: string;
@@ -304,6 +305,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   private async handleMessage(msg: WWebMessage): Promise<void> {
     try {
+      if (isStatusBroadcastMessage({ from: msg.from, to: msg.to })) {
+        return;
+      }
+
       if (this.wasMessageRecentlyHandled(msg.id._serialized)) {
         return;
       }

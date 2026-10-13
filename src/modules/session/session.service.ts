@@ -19,6 +19,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { isStatusBroadcastMessage } from '../../common/utils/whatsapp-message.util';
 
 interface ReconnectState {
   attempts: number;
@@ -457,6 +458,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
   }
 
   private async handleEngineMessage(id: string, message: IncomingMessage): Promise<void> {
+    if (isStatusBroadcastMessage(message)) {
+      return;
+    }
+
     const direction = message.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
     const status = message.fromMe ? MessageStatus.SENT : MessageStatus.DELIVERED;
     const eventName = message.fromMe ? 'message.sent' : 'message.received';

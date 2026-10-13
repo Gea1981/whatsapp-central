@@ -349,6 +349,35 @@ describe('SessionService', () => {
       expect(webhookService.dispatch).not.toHaveBeenCalledWith('sess-uuid-1', 'message.sent', expect.anything());
     });
 
+    it('should not persist or dispatch status broadcasts', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.start('sess-uuid-1');
+
+      const initialize = mockEngine.initialize as jest.MockedFunction<
+        (callbacks: EngineEventCallbacks) => Promise<void>
+      >;
+      initialize.mock.calls[0][0].onMessage?.({
+        id: 'wa-status-1',
+        from: 'status@broadcast',
+        to: '5491111111111@c.us',
+        chatId: 'status@broadcast',
+        body: 'Estado',
+        type: 'image',
+        timestamp: 123,
+        fromMe: false,
+        isGroup: false,
+      } satisfies IncomingMessage);
+
+      await flushPromises();
+
+      expect(messageRepository.findOne).not.toHaveBeenCalled();
+      expect(messageRepository.save).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+
     it('should strip base64 media data from webhook payload but keep it for websocket events', async () => {
       const session = createMockSession();
       const base64Data = Buffer.alloc(1024, 'x').toString('base64');
